@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Calculadora de costo de vida, Número de la Libertad y progreso del portafolio de inversiones.">
+<title>Número de la Libertad</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Manrope:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: una columna en móvil (presupuesto y luego resultados, con barra fija de total); dos columnas en escritorio con resultados fijos a la derecha. */
+:root {
+  --bg: #FAF8F5;
+  --surface: #FFFFFF;
+  --surface-2: #F3EFE8;
+  --ink: #1B3B2B;
+  --ink-soft: #4F6A5B;
+  --line: #E6DFD3;
+  --gold: #C5A059;
+  --gold-ink: #8C6A2C;
+  --hero: #1B3B2B;
+  --hero-ink: #FAF8F5;
+  --hero-soft: #C9D6CD;
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-body: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111C16; --surface: #17251D; --surface-2: #1D2E24; --ink: #EFEAE1; --ink-soft: #A9BBAF;
+    --line: #2A3D32; --gold: #D2AE6A; --gold-ink: #D9B977; --hero: #20372A; --hero-ink: #FAF8F5; --hero-soft: #B8C9BD;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111C16; --surface: #17251D; --surface-2: #1D2E24; --ink: #EFEAE1; --ink-soft: #A9BBAF;
+  --line: #2A3D32; --gold: #D2AE6A; --gold-ink: #D9B977; --hero: #20372A; --hero-ink: #FAF8F5; --hero-soft: #B8C9BD;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; -webkit-font-smoothing: antialiased; }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.font-display { font-family: var(--font-display); }
+.num { font-variant-numeric: tabular-nums; }
+h1, h2, h3 { text-wrap: balance; }
+.eyebrow { letter-spacing: .12em; text-transform: uppercase; font-size: 11px; font-weight: 700; }
+input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number] { -moz-appearance: textfield; }
+.field:focus-within { border-color: var(--gold); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 25%, transparent); }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 99px; background: linear-gradient(to right, var(--gold) var(--p), color-mix(in srgb, var(--hero-ink) 22%, transparent) var(--p)); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%; background: var(--hero-ink); border: 3px solid var(--gold); cursor: pointer; }
+input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: var(--hero-ink); border: 3px solid var(--gold); cursor: pointer; }
+.app-header { top: env(safe-area-inset-top, 0px); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 40; background: var(--bg); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+html, body { margin: 0; min-height: 100%; }
+</style>
+</head>
+<body>
+<div id="root">
+  <p class="wrap" style="padding-block:40px;font-family:var(--font-body);color:var(--ink-soft)">Cargando la calculadora…</p>
+</div>
+
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>
+tailwind.config = {
+  theme: { extend: {
+    colors: {
+      bg: 'var(--bg)', surface: 'var(--surface)', surface2: 'var(--surface-2)', ink: 'var(--ink)', soft: 'var(--ink-soft)',
+      line: 'var(--line)', gold: 'var(--gold)', goldink: 'var(--gold-ink)', hero: 'var(--hero)', heroink: 'var(--hero-ink)', herosoft: 'var(--hero-soft)'
+    }
+  } }
+};
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.2/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+
+/* ---------- Configuración ---------- */
+const STORAGE_KEY = 'numero-libertad:v2';
+
+const CURRENCIES = {
+  PEN: { code: 'PEN', symbol: 'S/', label: 'Soles', locale: 'es-PE', decimals: 2 },
+  USD: { code: 'USD', symbol: '$', label: 'Dólares', locale: 'en-US', decimals: 2 },
+  CLP: { code: 'CLP', symbol: '$', label: 'Pesos chilenos', locale: 'es-CL', decimals: 0 },
+};
+
+// Tipo de cambio aplicado (unidades de cada moneda por 1 USD). Fijado al publicar esta versión.
+const FX = {
+  date: '25 de noviembre de 2026',
+  perUSD: { USD: 1, PEN: 3.47, CLP: 1025.06 },
+  sources: {
+    PEN: 'cotización de apertura USD/PEN (Dow Jones, vía Infobae)',
+    CLP: 'dólar observado del Banco Central de Chile',
+  },
+};
+const convert = (amount, from, to) => (amount / FX.perUSD[from]) * FX.perUSD[to];
+
+const CATEGORIES = [
+  { id: 'esenciales', name: 'Gastos esenciales', hint: 'Lo que necesitas cada mes para vivir.',
+    items: [['vivienda', 'Vivienda / hipoteca'], ['servicios', 'Servicios (luz, agua, internet)'], ['alimentacion', 'Alimentación'], ['transporte', 'Transporte'], ['salud', 'Salud y seguros'], ['educacion_hijos', 'Educación hijos']] },
+  { id: 'estilo', name: 'Estilo de vida y diversión', hint: 'Lo que hace que tu vida se sienta tuya.',
+    items: [['salidas', 'Salidas y restaurantes'], ['viajes', 'Viajes (promedio mensual)'], ['hobbies', 'Hobbies'], ['compras', 'Compras y regalos']] },
+  { id: 'formacion', name: 'Formación y desarrollo', hint: 'Lo que inviertes en aprender.',
+    items: [['cursos', 'Cursos'], ['libros', 'Libros']] },
+  { id: 'otros', name: 'Otros / compromisos', hint: 'Personas y causas que apoyas.',
+    items: [['familia', 'Apoyo familiar'], ['donaciones', 'Donaciones'], ['mascotas', 'Mascotas']] },
+];
+const ALL_ITEMS = CATEGORIES.flatMap(c => c.items.map(([k]) => k));
+
+const RATE_MIN = 4, RATE_MAX = 8, RATE_DEFAULT = 6;
+
+const TABS = [
+  { id: 'gastos', label: '1. Gastos y Meta' },
+  { id: 'portafolio', label: '2. Mi Portafolio' },
+  { id: 'progreso', label: '3. Mi Progreso' },
+];
+const isTab = id => TABS.some(t => t.id === id);
+const TAB_KEY = 'numero-libertad:tab';
+
+/* ---------- Cálculos (reglas del proyecto) ---------- */
+const toNumber = v => { const n = parseFloat(String(v).replace(',', '.')); return Number.isFinite(n) && n > 0 ? n : 0; };
+const categoryTotal = (cat, values, customs) =>
+  cat.items.reduce((s, [k]) => s + toNumber(values[k]), 0) +
+  customs.filter(c => c.cat === cat.id).reduce((s, c) => s + toNumber(c.value), 0);
+const monthlyTotal = (values, customs) => CATEGORIES.reduce((s, c) => s + categoryTotal(c, values, customs), 0); // Suma de las 4 categorías
+const annualTotal = monthly => monthly * 12;                            // Costo mensual × 12
+const goalConservative = annual => annual * 25;                         // Regla del 4%: anual × 25
+const goalDynamic = (annual, ratePct) => ratePct > 0 ? annual / (ratePct / 100) : 0; // anual ÷ tasa
+const invAnnualReturn = inv => toNumber(inv.amount) * (toNumber(inv.rate) / 100); // monto × (tasa / 100)
+const portfolioTotal = invs => invs.reduce((s, i) => s + toNumber(i.amount), 0);
+const portfolioAnnualReturn = invs => invs.reduce((s, i) => s + invAnnualReturn(i), 0);
+
+const fmt = (n, cur) => {
+  const c = CURRENCIES[cur];
+  const s = new Intl.NumberFormat(c.locale, { maximumFractionDigits: 0 }).format(Math.round(n));
+  return `${c.symbol} ${s}`;
+};
+const fmtCompact = (n, cur) => {
+  const c = CURRENCIES[cur];
+  if (n >= 1e6) {
+    const v = new Intl.NumberFormat('es-PE', { maximumFractionDigits: n >= 1e8 ? 0 : 1 }).format(n / 1e6);
+    return `${c.symbol} ${v} ${n / 1e6 >= 2 ? 'millones' : 'millón'}`;
+  }
+  return fmt(n, cur);
+};
+// Formato corto para la mini-barra: 1,5 M · 310 mil
+const fmtShort = (n, cur) => {
+  const c = CURRENCIES[cur];
+  const f = (v, d) => new Intl.NumberFormat(c.locale, { maximumFractionDigits: d }).format(v);
+  if (n >= 1e6) return `${c.symbol} ${f(n / 1e6, n >= 1e8 ? 0 : 1)} M`;
+  if (n >= 1e4) return `${c.symbol} ${f(n / 1e3, 0)} mil`;
+  return fmt(n, cur);
+};
+const fmtRate = (n, d = 2) => new Intl.NumberFormat('es-PE', { minimumFractionDigits: d, maximumFractionDigits: d }).format(n);
+const pctLabel = r => r.toFixed(1).replace('.', ',');
+
+// Convierte un monto escrito (texto) a otra moneda, redondeado según la moneda destino.
+const convertText = (text, from, to) => {
+  if (String(text).trim() === '') return '';
+  const n = parseFloat(String(text).replace(',', '.'));
+  if (!Number.isFinite(n)) return '';
+  const f = 10 ** CURRENCIES[to].decimals;
+  return String(Math.round(convert(n, from, to) * f) / f);
+};
+
+/* ---------- Persistencia ---------- */
+const emptyValues = () => Object.fromEntries(ALL_ITEMS.map(k => [k, '']));
+const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const INV_CATEGORIES = ['Inmuebles', 'Renta Variable', 'Renta Fija', 'Acciones', 'Otros'];
+const INV_COUNTRIES = ['PERU', 'CHILE', 'USA', 'OTRO'];
+const NAME_MAX = 16;
+const INV_ROW_COLS = 'md:grid-cols-[150px_minmax(0,1fr)_minmax(0,1fr)_104px_100px_40px]';
+const emptyInvestment = () => ({ id: newId(), name: '', cat: '', amount: '', rate: '', country: '' });
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (!s || !CURRENCIES[s.currency] || typeof s.values !== 'object') return null;
+    const rate = Math.min(RATE_MAX, Math.max(RATE_MIN, Number(s.rate) || RATE_DEFAULT));
+    const customs = Array.isArray(s.customs)
+      ? s.customs.filter(c => c && CATEGORIES.some(k => k.id === c.cat)).map(c => ({ id: String(c.id || newId()), cat: c.cat, label: String(c.label || ''), value: String(c.value ?? '') }))
+      : [];
+    const origin = s.origin && CURRENCIES[s.origin.currency] && typeof s.origin.values === 'object' && typeof s.origin.customVals === 'object' ? s.origin : null;
+    const hasInv = Array.isArray(s.investments);
+    // Las inversiones de ejemplo de versiones anteriores se descartan: la lista empieza con una fila vacía.
+    let investments = hasInv && !s.invExample
+      ? s.investments.filter(i => i && typeof i === 'object').map(i => ({
+          id: String(i.id || newId()), name: String(i.name || '').slice(0, NAME_MAX), amount: String(i.amount ?? ''), rate: String(i.rate ?? ''),
+          cat: INV_CATEGORIES.includes(i.cat) ? i.cat : '', country: INV_COUNTRIES.includes(i.country) ? i.country : '',
+        }))
+      : [];
+    if (investments.length === 0) investments = [emptyInvestment()];
+    const scenario = s.scenario === 'dinamico' ? 'dinamico' : 'conservador';
+    return { currency: s.currency, values: { ...emptyValues(), ...s.values }, customs, rate, origin: hasInv && !s.invExample ? origin : null,
+      investments, scenario };
+  } catch (e) { return null; }
+}
+function saveState(s) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); return true; } catch (e) { return false; }
+}
+
+/* ---------- Componentes ---------- */
+function CurrencySwitch({ value, onChange }) {
+  return (
+    <div role="radiogroup" aria-label="Moneda" className="inline-flex rounded-full border border-line bg-surface p-1">
+      {Object.values(CURRENCIES).map(c => {
+        const active = c.code === value;
+        return (
+          <button key={c.code} id={`moneda-${c.code}`} role="radio" aria-checked={active} onClick={() => onChange(c.code)}
+            className={`num whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-semibold transition-colors sm:px-3.5 sm:py-2 sm:text-sm ${active ? 'bg-ink text-bg' : 'text-soft hover:text-ink'}`}>
+            <span className="hidden sm:inline">{c.symbol} </span>{c.code}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AmountField({ id, value, onChange, cur, label }) {
+  return (
+    <span className="field flex w-[44%] max-w-[180px] shrink-0 items-center gap-1.5 rounded-xl border border-line bg-bg px-3 py-2 transition-shadow">
+      <span className="text-sm font-semibold text-goldink">{CURRENCIES[cur].symbol}</span>
+      <input id={id} type="number" inputMode="decimal" min="0" step="any" placeholder="0" value={value} aria-label={label}
+        onChange={e => onChange(e.target.value)}
+        className="num w-full min-w-0 bg-transparent text-right text-[16px] font-semibold text-ink placeholder:text-soft focus:outline-none" />
+    </span>
+  );
+}
+
+function MoneyInput({ id, label, value, onChange, cur }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-2.5">
+      <label htmlFor={id} className="min-w-0 text-[15px] leading-snug text-ink">{label}</label>
+      <AmountField id={id} value={value} onChange={onChange} cur={cur} />
+    </div>
+  );
+}
+
+function CustomRow({ item, cur, onChange, onRemove, autoFocus }) {
+  return (
+    <div className="flex items-center justify-between gap-2 py-2.5">
+      <input id={`n-${item.id}`} type="text" value={item.label} placeholder="Nombre del gasto" autoFocus={autoFocus}
+        aria-label="Nombre del gasto personal" maxLength={60}
+        onChange={e => onChange({ label: e.target.value })}
+        className="min-w-0 flex-1 rounded-lg border border-dashed border-line bg-transparent px-2.5 py-2 text-[16px] text-ink placeholder:text-soft focus:border-gold focus:outline-none" />
+      <AmountField id={`g-${item.id}`} value={item.value} onChange={v => onChange({ value: v })} cur={cur}
+        label={`Monto de ${item.label || 'gasto personal'}`} />
+      <button onClick={onRemove} aria-label={`Quitar ${item.label || 'gasto personal'}`}
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-soft hover:bg-surface2 hover:text-ink">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+      </button>
+    </div>
+  );
+}
+
+function CategoryCard({ cat, index, values, setValue, customs, addCustom, updateCustom, removeCustom, lastAdded, cur, monthly }) {
+  const subtotal = categoryTotal(cat, values, customs);
+  const share = monthly > 0 ? Math.round((subtotal / monthly) * 100) : 0;
+  const mine = customs.filter(c => c.cat === cat.id);
+  return (
+    <section className="rounded-2xl border border-line bg-surface p-4 sm:p-5" aria-labelledby={`cat-${cat.id}`}>
+      <header className="flex items-start justify-between gap-3 border-b border-line pb-3">
+        <div className="min-w-0">
+          <p className="eyebrow text-goldink">Categoría {index + 1} de 4</p>
+          <h3 id={`cat-${cat.id}`} className="font-display mt-1 text-xl font-medium text-ink">{cat.name}</h3>
+          <p className="mt-0.5 text-sm text-soft">{cat.hint}</p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="num text-lg font-bold text-ink">{fmt(subtotal, cur)}</p>
+          <p className="num text-xs text-soft">{share}% del total</p>
+        </div>
+      </header>
+      <div className="divide-y divide-line">
+        {cat.items.map(([k, label]) => (
+          <MoneyInput key={k} id={`g-${k}`} label={label} value={values[k]} onChange={v => setValue(k, v)} cur={cur} />
+        ))}
+        {mine.map(item => (
+          <CustomRow key={item.id} item={item} cur={cur} autoFocus={item.id === lastAdded}
+            onChange={patch => updateCustom(item.id, patch)} onRemove={() => removeCustom(item.id)} />
+        ))}
+      </div>
+      <button id={`add-${cat.id}`} onClick={() => addCustom(cat.id)}
+        className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-gold py-2.5 text-sm font-semibold text-goldink hover:bg-surface2">
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gold text-[#1B3B2B]" aria-hidden="true">
+          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+        </span>
+        Agregar gasto personal
+      </button>
+    </section>
+  );
+}
+
+function Composition({ values, customs, monthly }) {
+  const shades = ['var(--ink)', 'var(--gold)', 'color-mix(in srgb, var(--ink) 45%, var(--surface))', 'color-mix(in srgb, var(--gold) 50%, var(--surface))'];
+  if (monthly <= 0) return null;
+  return (
+    <div>
+      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-surface2" aria-hidden="true">
+        {CATEGORIES.map((c, i) => (
+          <div key={c.id} style={{ width: `${(categoryTotal(c, values, customs) / monthly) * 100}%`, background: shades[i] }} />
+        ))}
+      </div>
+      <ul className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs text-soft">
+        {CATEGORIES.map((c, i) => (
+          <li key={c.id} className="flex min-w-0 items-center gap-2">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: shades[i] }} />
+            <span className="truncate">{c.name}</span>
+            <span className="num ml-auto font-semibold text-ink">{Math.round((categoryTotal(c, values, customs) / monthly) * 100)}%</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function Results({ cur, monthly, annual, rate, setRate, values, customs, scenario }) {
+  const conservative = goalConservative(annual);
+  const dynamic = goalDynamic(annual, rate);
+  const multiple = rate > 0 ? 100 / rate : 0;
+  const pct = ((rate - RATE_MIN) / (RATE_MAX - RATE_MIN)) * 100;
+  const diff = conservative - dynamic;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <section className="rounded-2xl border border-line bg-surface p-5" aria-labelledby="res-costo">
+        <h2 id="res-costo" className="eyebrow text-goldink">Tu costo de vida</h2>
+        <div className="mt-3 grid grid-cols-2 gap-4">
+          <div className="min-w-0">
+            <p className="text-sm text-soft">Mensual</p>
+            <p className="num font-display mt-1 break-words text-[26px] font-semibold leading-tight text-ink sm:text-3xl">{fmt(monthly, cur)}</p>
+          </div>
+          <div className="min-w-0 border-l border-line pl-4">
+            <p className="text-sm text-soft">Anual <span className="text-xs">(× 12)</span></p>
+            <p className="num font-display mt-1 break-words text-[26px] font-semibold leading-tight text-ink sm:text-3xl">{fmt(annual, cur)}</p>
+          </div>
+        </div>
+        {monthly > 0
+          ? <div className="mt-5"><Composition values={values} customs={customs} monthly={monthly} /></div>
+          : <p className="mt-4 rounded-xl bg-surface2 px-3.5 py-3 text-sm text-soft">Escribe tus gastos mensuales en cada categoría y aquí verás tu costo de vida y tu meta al instante.</p>}
+      </section>
+
+      <section className="rounded-2xl bg-hero p-5 text-heroink" aria-labelledby="res-meta">
+        <h2 id="res-meta" className="eyebrow text-gold">Tu Número de la Libertad</h2>
+        <p className="mt-1 text-sm text-herosoft">El capital que necesitas para cubrir tu costo de vida anual con retiros de tu portafolio.</p>
+
+        <div className="mt-4 flex flex-col gap-3">
+          <article className="rounded-xl border border-white/15 bg-white/5 p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <h3 className="text-[15px] font-semibold">Escenario conservador {scenario === 'conservador' && <span className="ml-1 align-middle text-[11px] font-semibold text-gold">· usado en tu avance</span>}</h3>
+              <span className="rounded-full border border-gold px-2.5 py-0.5 text-xs font-semibold text-gold">Regla del 4%</span>
+            </div>
+            <p className="num font-display mt-2 break-words text-[34px] font-semibold leading-none sm:text-4xl">{fmt(conservative, cur)}</p>
+            <p className="num mt-2 text-xs text-herosoft">{fmt(annual, cur)} al año × 25</p>
+          </article>
+
+          <article className="rounded-xl border border-gold bg-white/5 p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <h3 className="text-[15px] font-semibold">Escenario dinámico {scenario === 'dinamico' && <span className="ml-1 align-middle text-[11px] font-semibold text-gold">· usado en tu avance</span>}</h3>
+              <span className="num rounded-full bg-gold px-2.5 py-0.5 text-xs font-bold text-[#1B3B2B]">Tasa {pctLabel(rate)}%</span>
+            </div>
+            <p className="num font-display mt-2 break-words text-[34px] font-semibold leading-none sm:text-4xl">{fmt(dynamic, cur)}</p>
+            <p className="num mt-2 text-xs text-herosoft">{fmt(annual, cur)} al año ÷ {pctLabel(rate)}% (≈ × {pctLabel(multiple)})</p>
+
+            <div className="mt-4">
+              <div className="flex items-center justify-between gap-3">
+                <label htmlFor="tasa" className="text-sm text-herosoft">Tasa retorno promedio anual</label>
+                <span className="field flex items-center gap-1 rounded-lg border border-white/20 bg-white/10 px-2 py-1">
+                  <input id="tasa-num" type="number" inputMode="decimal" min={RATE_MIN} max={RATE_MAX} step="0.1" value={rate}
+                    aria-label="Tasa retorno promedio anual en porcentaje"
+                    onChange={e => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setRate(Math.min(RATE_MAX, Math.max(RATE_MIN, v))); }}
+                    className="num w-12 bg-transparent text-right text-[16px] font-semibold text-heroink focus:outline-none" />
+                  <span className="text-sm text-herosoft">%</span>
+                </span>
+              </div>
+              <input id="tasa" type="range" min={RATE_MIN} max={RATE_MAX} step="0.1" value={rate}
+                onChange={e => setRate(parseFloat(e.target.value))} style={{ '--p': `${pct}%` }} className="mt-3" />
+              <div className="num mt-1.5 flex justify-between text-[11px] text-herosoft">
+                {[4, 5, 6, 7, 8].map(n => <span key={n}>{n}%</span>)}
+              </div>
+            </div>
+          </article>
+        </div>
+
+        {annual > 0 && Math.abs(diff) >= 1 && (
+          <p className="num mt-4 text-sm text-herosoft">
+            Con una tasa del {pctLabel(rate)}%, la meta es {fmt(Math.abs(diff), cur)} {diff > 0 ? 'menor' : 'mayor'} que con la regla del 4%.
+          </p>
+        )}
+      </section>
+
+      <p className="px-1 text-xs leading-relaxed text-soft">
+        Fórmulas: anual = mensual × 12 · conservador = anual × 25 · dinámico = anual ÷ tasa retorno promedio anual. Herramienta de cálculo, no constituye asesoría financiera.
+      </p>
+    </div>
+  );
+}
+
+function FxNote({ cur, lastConversion }) {
+  const pen = FX.perUSD.PEN, clp = FX.perUSD.CLP;
+  return (
+    <footer className="mt-8 border-t border-line pt-4 text-xs leading-relaxed text-soft">
+      <p className="eyebrow text-goldink">Tipo de cambio aplicado</p>
+      <p className="num mt-2 text-sm text-ink">
+        1 USD = S/ {fmtRate(pen)} · 1 USD = $ {new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2 }).format(clp)} CLP · 1 PEN = $ {new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(clp / pen)} CLP
+      </p>
+      <p className="mt-1.5 max-w-[80ch]">
+        Tasas del {FX.date}. USD/PEN: {FX.sources.PEN}. USD/CLP: {FX.sources.CLP}. La conversión entre soles y pesos se calcula a través del dólar.
+        Al cambiar de moneda, todos tus montos se convierten con estas tasas, que se actualizan con cada nueva versión de la calculadora.
+      </p>
+      {lastConversion && (
+        <p className="mt-1.5 font-semibold text-goldink" aria-live="polite">Montos convertidos de {lastConversion.from} a {lastConversion.to}.</p>
+      )}
+    </footer>
+  );
+}
+
+/* ---------- Portafolio (Etapa 2) ---------- */
+function Meter({ value, label }) {
+  const w = Math.max(0, Math.min(100, value));
+  return (
+    <div className="h-3 w-full overflow-hidden rounded-full bg-surface2" role="progressbar" aria-label={label}
+      aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(w)}>
+      <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${w}%`, background: w >= 100 ? 'var(--ink)' : 'var(--gold)' }} />
+    </div>
+  );
+}
+
+function ClearButton({ id, onConfirm, label = 'Borrar datos' }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <button id={id} onClick={() => { if (armed) { onConfirm(); setArmed(false); } else setArmed(true); }}
+      className={`shrink-0 rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${armed ? 'border-[#B4553D] bg-[#B4553D] text-white' : 'border-line bg-surface text-ink hover:border-gold'}`}>
+      {armed ? 'Toca de nuevo para borrar' : label}
+    </button>
+  );
+}
+
+function Select({ id, value, onChange, options, placeholder, label, className = '' }) {
+  return (
+    <span className={`field relative flex min-w-0 items-center rounded-xl border border-line bg-bg transition-shadow ${className}`}>
+      <select id={id} value={value} onChange={e => onChange(e.target.value)} aria-label={label}
+        className={`w-full min-w-0 appearance-none truncate bg-transparent py-2 pl-3 pr-8 text-[16px] focus:outline-none md:text-[15px] ${value ? 'font-semibold text-ink' : 'text-soft'}`}>
+        <option value="">{placeholder}</option>
+        {options.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+      <svg className="pointer-events-none absolute right-3 text-goldink" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+        <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
+  );
+}
+
+function InvestmentRow({ inv, cur, total, onChange, onRemove, autoFocus, index }) {
+  const amount = toNumber(inv.amount);
+  const annual = invAnnualReturn(inv);
+  const weight = total > 0 ? (amount / total) * 100 : 0;
+  const n = index + 1;
+  return (
+    <div className="py-3">
+      {/* Celular: 3 líneas (categoría y nombre · monto y retorno · país y quitar). Escritorio: una sola línea. */}
+      <div className={`grid grid-cols-2 gap-2 ${INV_ROW_COLS} md:items-center`}>
+        <Select id={`inv-c-${inv.id}`} value={inv.cat} onChange={v => onChange({ cat: v })} options={INV_CATEGORIES}
+          placeholder="Categoría" label={`Categoría, inversión ${n}`} />
+        <input id={`inv-n-${inv.id}`} type="text" value={inv.name} placeholder="Nombre" maxLength={NAME_MAX} autoFocus={autoFocus}
+          aria-label={`Nombre de la inversión ${n} (máximo ${NAME_MAX} caracteres)`} onChange={e => onChange({ name: e.target.value.slice(0, NAME_MAX) })}
+          className="min-w-0 rounded-xl border border-line bg-bg px-3 py-2 text-[16px] text-ink placeholder:text-soft focus:border-gold focus:outline-none md:text-[15px]" />
+        <label className="field flex min-w-0 items-center gap-1.5 rounded-xl border border-line bg-bg px-3 py-2 transition-shadow">
+          <span className="text-sm font-semibold text-goldink">{CURRENCIES[cur].symbol}</span>
+          <input id={`inv-a-${inv.id}`} type="number" inputMode="decimal" min="0" step="any" placeholder="Monto" value={inv.amount}
+            aria-label={`Monto invertido actual, inversión ${n}`} onChange={e => onChange({ amount: e.target.value })}
+            className="num w-full min-w-0 bg-transparent text-right text-[16px] font-semibold text-ink placeholder:text-soft placeholder:font-normal focus:outline-none md:text-[15px]" />
+        </label>
+        <label className="field flex min-w-0 items-center gap-1 rounded-xl border border-line bg-bg px-3 py-2 transition-shadow">
+          <input id={`inv-r-${inv.id}`} type="number" inputMode="decimal" min="0" max="100" step="0.1" placeholder="Retorno" value={inv.rate}
+            aria-label={`Retorno anual esperado en porcentaje, inversión ${n}`} onChange={e => onChange({ rate: e.target.value })}
+            className="num w-full min-w-0 bg-transparent text-right text-[16px] font-semibold text-ink placeholder:text-soft placeholder:font-normal focus:outline-none md:text-[15px]" />
+          <span className="text-sm font-semibold text-goldink">%</span>
+        </label>
+        <Select id={`inv-p-${inv.id}`} value={inv.country} onChange={v => onChange({ country: v })} options={INV_COUNTRIES}
+          placeholder="País" label={`País, inversión ${n}`} />
+        <button onClick={onRemove} aria-label={`Quitar inversión ${n}`}
+          className="flex h-10 items-center justify-center gap-1.5 justify-self-end rounded-full px-3 text-sm text-soft hover:bg-surface2 hover:text-ink md:w-10 md:px-0">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+          <span className="md:hidden">Quitar</span>
+        </button>
+      </div>
+      {amount > 0 && (
+        <p className="num mt-2 px-1 text-[13px] text-soft">
+          Genera <strong className="text-ink">{fmt(annual / 12, cur)}</strong> al mes · <strong className="text-ink">{fmt(annual, cur)}</strong> al año · <span className="font-semibold text-goldink">{pctLabel(weight)}%</span> de tu portafolio
+        </p>
+      )}
+    </div>
+  );
+}
+
+function InvestmentList({ investments, cur, total, lastAdded, onAdd, onChange, onRemove }) {
+  return (
+    <section className="rounded-2xl border border-line bg-surface p-4 sm:p-5" aria-labelledby="inv-title">
+      <header className="flex items-start justify-between gap-3 border-b border-line pb-3">
+        <div className="min-w-0">
+          <h3 id="inv-title" className="font-display text-xl font-medium text-ink">Mis inversiones</h3>
+          <p className="mt-0.5 text-sm text-soft">Elige la categoría, escribe un nombre corto, cuánto tienes invertido hoy y el retorno anual que esperas.</p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="num text-lg font-bold text-ink">{fmt(total, cur)}</p>
+          <p className="text-xs text-soft">invertido</p>
+        </div>
+      </header>
+      <div className="hidden gap-x-2 px-1 pt-3 text-xs text-soft md:grid md:grid-cols-[150px_minmax(0,1fr)_minmax(0,1fr)_104px_100px_40px]">
+        <span>Categoría</span><span>Nombre de la inversión</span><span>Monto invertido actual</span><span>Retorno anual</span><span>País</span><span />
+      </div>
+      <p className="px-1 pt-3 text-xs text-soft md:hidden">En cada línea: categoría, nombre (hasta 16 letras), monto invertido actual, retorno anual esperado (%) y país. Categoría y país son opcionales.</p>
+      <div className="divide-y divide-line">
+        {investments.map((inv, i) => (
+          <InvestmentRow key={inv.id} inv={inv} index={i} cur={cur} total={total} autoFocus={inv.id === lastAdded}
+            onChange={patch => onChange(inv.id, patch)} onRemove={() => onRemove(inv.id)} />
+        ))}
+      </div>
+      <button id="add-inversion" onClick={onAdd}
+        className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-gold py-2.5 text-sm font-semibold text-goldink hover:bg-surface2">
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gold text-[#1B3B2B]" aria-hidden="true">
+          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+        </span>
+        Agregar otra inversión
+      </button>
+    </section>
+  );
+}
+
+function Distribution({ investments, total, cur }) {
+  const [by, setBy] = useState('cat');
+  if (total <= 0) return null;
+  const key = by === 'cat' ? 'cat' : 'country';
+  const order = by === 'cat' ? INV_CATEGORIES : INV_COUNTRIES;
+  const empty = by === 'cat' ? 'Sin categoría' : 'Sin país';
+  const sums = {};
+  investments.forEach(i => {
+    const v = toNumber(i.amount);
+    if (v <= 0) return;
+    const k = i[key] || empty;
+    sums[k] = (sums[k] || 0) + v;
+  });
+  const rows = [...order, empty].filter(k => sums[k] > 0).map(k => ({ k, v: sums[k] })).sort((a, b) => b.v - a.v);
+  return (
+    <div>
+      <div role="radiogroup" aria-label="Agrupar distribución" className="inline-flex rounded-full border border-line bg-surface p-1">
+        {[['cat', 'Por categoría'], ['pais', 'Por país']].map(([id, label]) => (
+          <button key={id} id={`dist-${id}`} role="radio" aria-checked={by === id} onClick={() => setBy(id)}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${by === id ? 'bg-ink text-bg' : 'text-soft hover:text-ink'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <ul className="mt-4 flex flex-col gap-3">
+        {rows.map(r => {
+          const pct = (r.v / total) * 100;
+          return (
+            <li key={r.k} className="min-w-0">
+              <div className="flex items-baseline justify-between gap-3 text-sm">
+                <span className={`min-w-0 truncate ${r.k === empty ? 'text-soft' : 'text-ink'}`}>{r.k}</span>
+                <span className="num shrink-0 text-soft"><span className="hidden sm:inline">{fmt(r.v, cur)} · </span><strong className="text-ink">{pctLabel(pct)}%</strong></span>
+              </div>
+              <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-surface2" aria-hidden="true">
+                <div className="h-full rounded-full" style={{ width: `${pct}%`, background: r.k === empty ? 'color-mix(in srgb, var(--ink) 35%, var(--surface))' : 'var(--gold)' }} />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function PortfolioSummary({ cur, total, passiveAnnual, investments }) {
+  const weighted = total > 0 ? (passiveAnnual / total) * 100 : 0;
+  return (
+    <section className="rounded-2xl border border-line bg-surface p-5" aria-labelledby="res-portafolio">
+      <h2 id="res-portafolio" className="eyebrow text-goldink">Resumen del portafolio</h2>
+      <p className="text-sm text-soft mt-3">Capital total invertido</p>
+      <p className="num font-display mt-1 break-words text-[34px] font-semibold leading-none text-ink sm:text-4xl">{fmt(total, cur)}</p>
+      <div className="mt-4 grid grid-cols-2 gap-4 border-t border-line pt-4">
+        <div className="min-w-0">
+          <p className="text-sm text-soft">Ingreso pasivo mensual</p>
+          <p className="num font-display mt-1 break-words text-2xl font-semibold text-ink">{fmt(passiveAnnual / 12, cur)}</p>
+        </div>
+        <div className="min-w-0 border-l border-line pl-4">
+          <p className="text-sm text-soft">Ingreso pasivo anual</p>
+          <p className="num font-display mt-1 break-words text-2xl font-semibold text-ink">{fmt(passiveAnnual, cur)}</p>
+        </div>
+      </div>
+      <div className="mt-4 flex items-baseline justify-between gap-3 rounded-xl bg-surface2 px-3.5 py-3">
+        <p className="text-sm text-soft">Rentabilidad promedio ponderada</p>
+        <p className="num text-xl font-bold text-goldink">{pctLabel(weighted)}%</p>
+      </div>
+    </section>
+  );
+}
+
+function Progress({ cur, scenario, setScenario, rate, goal, total, monthly, passiveMonthly, investments }) {
+  const capitalPct = goal > 0 ? (total / goal) * 100 : 0;
+  const capitalGap = Math.max(0, goal - total);
+  const coveragePct = monthly > 0 ? (passiveMonthly / monthly) * 100 : 0;
+  const coverageGap = Math.max(0, monthly - passiveMonthly);
+  return (
+    <section id="progreso" className="rounded-2xl border border-line bg-surface p-5 sm:p-6" aria-labelledby="prog-title">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <h2 id="prog-title" className="font-display text-2xl font-medium text-ink sm:text-3xl">Tu progreso hacia la libertad financiera</h2>
+        </div>
+        <div className="min-w-0">
+          <p className="mb-1.5 text-xs text-soft">Medir contra el escenario</p>
+          <div role="radiogroup" aria-label="Escenario para medir el avance" className="inline-flex rounded-full border border-line bg-bg p-1">
+            {[['conservador', 'Regla del 4%'], ['dinamico', `Dinámico ${pctLabel(rate)}%`]].map(([id, label]) => (
+              <button key={id} id={`esc-${id}`} role="radio" aria-checked={scenario === id} onClick={() => setScenario(id)}
+                className={`num rounded-full px-3.5 py-2 text-sm font-semibold transition-colors ${scenario === id ? 'bg-ink text-bg' : 'text-soft hover:text-ink'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+        <article className="rounded-xl border border-line bg-bg p-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="text-[15px] font-semibold text-ink">Avance de capital</h3>
+            <p className="num font-display text-3xl font-semibold text-ink">{pctLabel(capitalPct)}%</p>
+          </div>
+          <div className="mt-3"><Meter value={capitalPct} label="Avance de capital" /></div>
+          {goal > 0 ? (
+            <p className="num mt-3 text-sm leading-relaxed text-soft">
+              Tienes <strong className="text-ink">{fmt(total, cur)}</strong> de tu Número de la Libertad de <strong className="text-ink">{fmt(goal, cur)}</strong>.{' '}
+              {capitalGap > 0 ? <>Te faltan <strong className="text-goldink">{fmt(capitalGap, cur)}</strong> para llegar al 100%.</> : <>Ya alcanzaste tu meta de capital.</>}
+            </p>
+          ) : (
+            <p className="mt-3 text-sm text-soft">Completa tus gastos en la pestaña Gastos y Meta para calcular tu meta de capital.</p>
+          )}
+        </article>
+
+        <article className="rounded-xl border border-line bg-bg p-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="text-[15px] font-semibold text-ink">Cobertura de gastos mensuales</h3>
+            <p className="num font-display text-3xl font-semibold text-ink">{pctLabel(coveragePct)}%</p>
+          </div>
+          <div className="mt-3"><Meter value={coveragePct} label="Cobertura de gastos mensuales" /></div>
+          {monthly > 0 ? (
+            <p className="num mt-3 text-sm leading-relaxed text-soft">
+              Tus inversiones generan <strong className="text-ink">{fmt(passiveMonthly, cur)}</strong> al mes frente a un costo de vida de <strong className="text-ink">{fmt(monthly, cur)}</strong>.{' '}
+              {coverageGap > 0 ? <>Faltan <strong className="text-goldink">{fmt(coverageGap, cur)}</strong> de ingreso pasivo al mes.</> : <>Tu ingreso pasivo ya cubre tu costo de vida.</>}
+            </p>
+          ) : (
+            <p className="mt-3 text-sm text-soft">Completa tus gastos en la pestaña Gastos y Meta para ver qué parte cubren tus inversiones.</p>
+          )}
+        </article>
+      </div>
+
+      <article className="mt-4 rounded-xl border border-line bg-bg p-4">
+        <h3 className="text-[15px] font-semibold text-ink">Distribución del portafolio</h3>
+        {total > 0
+          ? <div className="mt-3"><Distribution investments={investments} total={total} cur={cur} /></div>
+          : <p className="mt-2 text-sm text-soft">Agrega tus inversiones en la pestaña Mi Portafolio para ver su distribución por categoría.</p>}
+      </article>
+    </section>
+  );
+}
+
+function SectionHead({ title, text }) {
+  return (
+    <div className="min-w-0">
+      <h2 className="font-display mt-1 text-2xl font-medium text-ink sm:text-3xl">{title}</h2>
+      {text && <p className="mt-1 max-w-[60ch] text-[15px] text-soft">{text}</p>}
+    </div>
+  );
+}
+
+function App() {
+  const initial = useMemo(() => {
+    const s = loadState();
+    if (s) return s;
+    return { currency: 'PEN', values: emptyValues(), customs: [], rate: RATE_DEFAULT, origin: null, investments: [emptyInvestment()], scenario: 'conservador' };
+  }, []);
+  const [currency, setCurrency] = useState(initial.currency);
+  const [values, setValues] = useState(initial.values);
+  const [customs, setCustoms] = useState(initial.customs);
+  const [investments, setInvestments] = useState(initial.investments);
+  const [scenario, setScenario] = useState(initial.scenario);
+  const [rate, setRateRaw] = useState(initial.rate);
+  const [saved, setSaved] = useState(null);
+  const [lastAdded, setLastAdded] = useState(null);
+  const [lastConversion, setLastConversion] = useState(null);
+  // Montos tal como la usuaria los escribió, para convertir siempre desde el original y no acumular redondeos.
+  const [origin, setOrigin] = useState(initial.origin || null);
+  const [tab, setTab] = useState(() => {
+    const h = (window.location.hash || '').slice(1);
+    if (isTab(h)) return h;
+    try { const t = localStorage.getItem(TAB_KEY); if (isTab(t)) return t; } catch (e) {}
+    return 'gastos';
+  });
+  useEffect(() => {
+    try { localStorage.setItem(TAB_KEY, tab); } catch (e) {}
+    try { if (window.location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab); } catch (e) {}
+  }, [tab]);
+  useEffect(() => {
+    const onHash = () => { const h = window.location.hash.slice(1); if (isTab(h)) setTab(h); };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  const setRate = r => setRateRaw(Math.round(r * 10) / 10);
+  const setValue = (k, v) => { setValues(prev => ({ ...prev, [k]: v })); setOrigin(null); };
+  const addCustom = cat => { const id = newId(); setCustoms(prev => [...prev, { id, cat, label: '', value: '' }]); setLastAdded(id); setOrigin(null); };
+  const updateCustom = (id, patch) => { setCustoms(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c)); if ('value' in patch) setOrigin(null); };
+  const removeCustom = id => { setCustoms(prev => prev.filter(c => c.id !== id)); setOrigin(null); };
+
+  const addInvestment = () => { const inv = emptyInvestment(); setInvestments(prev => [...prev, inv]); setLastAdded(inv.id); setOrigin(null); };
+  const updateInvestment = (id, patch) => { setInvestments(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i)); if ('amount' in patch) setOrigin(null); };
+  // Siempre queda al menos una fila para escribir.
+  const removeInvestment = id => { setInvestments(prev => { const next = prev.filter(i => i.id !== id); return next.length ? next : [emptyInvestment()]; }); setOrigin(null); };
+
+  useEffect(() => {
+    setSaved(saveState({ currency, values, customs, rate, origin, investments, scenario }));
+  }, [currency, values, customs, rate, origin, investments, scenario]);
+
+
+  // Etapa 1
+  const monthly = monthlyTotal(values, customs);
+  const annual = annualTotal(monthly);
+  const goal = scenario === 'dinamico' ? goalDynamic(annual, rate) : goalConservative(annual);
+  // Etapa 2
+  const invested = portfolioTotal(investments);
+  const passiveAnnual = portfolioAnnualReturn(investments);
+  const passiveMonthly = passiveAnnual / 12;
+  const capitalPct = goal > 0 ? (invested / goal) * 100 : 0;
+
+  const changeCurrency = to => {
+    const from = currency;
+    if (to === from) return;
+    const base = origin || {
+      currency: from, values,
+      customVals: Object.fromEntries(customs.map(c => [c.id, c.value])),
+      invVals: Object.fromEntries(investments.map(i => [i.id, i.amount])),
+    };
+    if (!origin) setOrigin(base);
+    const conv = v => base.currency === to ? v : convertText(v, base.currency, to);
+    const invVals = base.invVals || {};
+    setValues(Object.fromEntries(Object.entries(base.values).map(([k, v]) => [k, conv(v)])));
+    setCustoms(prev => prev.map(c => ({ ...c, value: c.id in base.customVals ? conv(base.customVals[c.id]) : convertText(c.value, from, to) })));
+    setInvestments(prev => prev.map(i => ({ ...i, amount: i.id in invVals ? conv(invVals[i.id]) : convertText(i.amount, from, to) })));
+    setCurrency(to);
+    setLastConversion({ from, to });
+  };
+  const clearExpenses = () => { setValues(emptyValues()); setCustoms([]); setRate(RATE_DEFAULT); setOrigin(null); setLastConversion(null); };
+  const clearInvestments = () => { setInvestments([emptyInvestment()]); setOrigin(null); setLastConversion(null); };
+
+  const goTo = id => {
+    setTab(id);
+    try { window.scrollTo({ top: 0, behavior: 'auto' }); } catch (e) { window.scrollTo(0, 0); }
+  };
+  const scenarioLabel = scenario === 'dinamico' ? `${pctLabel(rate)}%` : '4%';
+
+  const NextButton = ({ to, children }) => (
+    <button id={`next-${to}`} onClick={() => goTo(to)}
+      className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-ink px-5 py-4 text-base font-semibold text-bg hover:opacity-90 sm:ml-auto sm:w-auto">
+      {children}
+    </button>
+  );
+
+  return (
+    <div className="min-h-full bg-bg pb-12">
+      {/* Encabezado fijo */}
+      <header className="app-header sticky z-30 border-b border-line bg-bg">
+        <div className="wrap mx-auto max-w-6xl">
+          <div className="flex items-center justify-between gap-3 pt-3">
+            <h1 className="font-display min-w-0 truncate text-lg font-medium leading-tight text-ink sm:text-2xl"><span className="hidden sm:inline">Tu </span>Número de la Libertad</h1>
+            <CurrencySwitch value={currency} onChange={changeCurrency} />
+          </div>
+
+          {/* Mini-barra de resumen */}
+          <div className="num mt-2.5 flex items-center justify-between gap-2 whitespace-nowrap rounded-xl bg-surface2 px-3 py-2 text-[12px] leading-tight min-[400px]:text-[13px] sm:px-4" aria-label="Resumen">
+            <p className="shrink-0"><span className="text-soft">Meta {scenarioLabel} </span><strong className="text-ink">{fmtShort(goal, currency)}</strong></p>
+            <p className="min-w-0 truncate"><span className="text-soft">Capital </span><strong className="text-ink">{fmtShort(invested, currency)}</strong></p>
+            <p className="shrink-0"><span className="text-soft">Avance </span><strong className="text-goldink">{pctLabel(capitalPct)}%</strong></p>
+          </div>
+
+          {/* Pestañas */}
+          <nav role="tablist" aria-label="Secciones" className="mt-2 grid grid-cols-3">
+            {TABS.map(t => {
+              const active = t.id === tab;
+              return (
+                <button key={t.id} id={`tab-${t.id}`} role="tab" aria-selected={active} aria-controls={`vista-${t.id}`} onClick={() => goTo(t.id)}
+                  className={`border-b-2 whitespace-nowrap px-0.5 py-2.5 text-[12px] font-semibold leading-tight transition-colors min-[380px]:text-[13px] sm:text-sm ${active ? 'border-gold text-ink' : 'border-transparent text-soft hover:text-ink'}`}>
+                  {t.label}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+      </header>
+
+      <main className="wrap mx-auto max-w-6xl" style={{ paddingBlock: '20px 0' }}>
+        {/* Pestaña 1: Gastos y Meta */}
+        {tab === 'gastos' && (
+          <section id="vista-gastos" role="tabpanel" aria-labelledby="tab-gastos">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <SectionHead title="Tu costo de vida y tu meta" text="Ingresa tu gasto real de vida al mes. El ahorro y la inversión no se incluyen, para medir solo lo que gastas." />
+              <ClearButton id="borrar-gastos" onConfirm={clearExpenses} />
+            </div>
+            <div className="mt-4 grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,420px)] lg:items-start">
+              <div className="flex min-w-0 flex-col gap-4">
+                {CATEGORIES.map((c, i) => (
+                  <CategoryCard key={c.id} cat={c} index={i} values={values} setValue={setValue} customs={customs}
+                    addCustom={addCustom} updateCustom={updateCustom} removeCustom={removeCustom} lastAdded={lastAdded}
+                    cur={currency} monthly={monthly} />
+                ))}
+              </div>
+              <div id="resultados" className="min-w-0">
+                <Results cur={currency} monthly={monthly} annual={annual} rate={rate} setRate={setRate} values={values} customs={customs} scenario={scenario} />
+              </div>
+            </div>
+            <div className="flex"><NextButton to="portafolio">Continuar a Mi Portafolio →</NextButton></div>
+          </section>
+        )}
+
+        {/* Pestaña 2: Mi Portafolio */}
+        {tab === 'portafolio' && (
+          <section id="vista-portafolio" role="tabpanel" aria-labelledby="tab-portafolio">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <SectionHead title="Tu portafolio de inversiones" text="Anota lo que ya tienes invertido y el retorno anual que esperas de cada inversión." />
+              <ClearButton id="borrar-inversiones" onConfirm={clearInvestments} />
+            </div>
+            <div className="mt-4 grid gap-5">
+              <div className="flex min-w-0 flex-col gap-4">
+                <InvestmentList investments={investments} cur={currency} total={invested} lastAdded={lastAdded}
+                  onAdd={addInvestment} onChange={updateInvestment} onRemove={removeInvestment} />
+              </div>
+              <div className="min-w-0">
+                <PortfolioSummary cur={currency} total={invested} passiveAnnual={passiveAnnual} investments={investments} />
+              </div>
+            </div>
+            <div className="flex"><NextButton to="progreso">Ver Mi Progreso →</NextButton></div>
+          </section>
+        )}
+
+        {/* Pestaña 3: Mi Progreso */}
+        {tab === 'progreso' && (
+          <section id="vista-progreso" role="tabpanel" aria-labelledby="tab-progreso">
+            <Progress cur={currency} scenario={scenario} setScenario={setScenario} rate={rate} goal={goal}
+              total={invested} monthly={monthly} passiveMonthly={passiveMonthly} investments={investments} />
+            <p className="mt-4 px-1 text-xs leading-relaxed text-soft">
+              Retorno anual = monto × tasa ÷ 100 · retorno mensual = retorno anual ÷ 12 · rentabilidad ponderada = ingreso pasivo anual ÷ capital total · avance de capital = capital invertido ÷ Número de la Libertad · cobertura = ingreso pasivo mensual ÷ costo de vida mensual.
+            </p>
+          </section>
+        )}
+
+        <FxNote cur={currency} lastConversion={lastConversion} />
+
+        <div className="mt-5">
+          <span className="text-xs text-soft" aria-live="polite">
+            {saved === false ? 'No se pudo guardar en este navegador' : 'Tus datos se guardan automáticamente en este navegador.'}
+          </span>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+
+</body>
+</html>
