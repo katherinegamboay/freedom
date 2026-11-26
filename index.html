@@ -101,17 +101,18 @@ const convert = (amount, from, to) => (amount / FX.perUSD[from]) * FX.perUSD[to]
 
 const CATEGORIES = [
   { id: 'esenciales', name: 'Gastos esenciales', hint: 'Lo que necesitas cada mes para vivir.',
-    items: [['vivienda', 'Vivienda / hipoteca'], ['servicios', 'Servicios (luz, agua, internet)'], ['alimentacion', 'Alimentación'], ['transporte', 'Transporte'], ['salud', 'Salud y seguros'], ['educacion_hijos', 'Educación hijos']] },
+    items: [['vivienda', 'Vivienda / hipoteca'], ['servicios', 'Servicios (luz, agua, internet)'], ['alimentacion', 'Alimentación'], ['transporte', 'Transporte'], ['salud', 'Salud y seguros'], ['educacion_hijos', 'Educación hijos'], ['mascotas', 'Mascotas']] },
   { id: 'estilo', name: 'Estilo de vida y diversión', hint: 'Lo que hace que tu vida se sienta tuya.',
-    items: [['salidas', 'Salidas y restaurantes'], ['viajes', 'Viajes (promedio mensual)'], ['hobbies', 'Hobbies'], ['compras', 'Compras y regalos']] },
+    items: [['salidas', 'Salidas y restaurantes'], ['viajes', 'Viajes (promedio mensual)'], ['hobbies', 'Hobbies'], ['compras', 'Compras y regalos'], ['ayuda_domestica', 'Ayuda doméstica']] },
   { id: 'formacion', name: 'Formación y desarrollo', hint: 'Lo que inviertes en aprender.',
     items: [['cursos', 'Cursos'], ['libros', 'Libros']] },
   { id: 'otros', name: 'Otros / compromisos', hint: 'Personas y causas que apoyas.',
-    items: [['familia', 'Apoyo familiar'], ['donaciones', 'Donaciones'], ['mascotas', 'Mascotas']] },
+    items: [['familia', 'Apoyo familiar'], ['donaciones', 'Donaciones']] },
 ];
 const ALL_ITEMS = CATEGORIES.flatMap(c => c.items.map(([k]) => k));
 
-const RATE_MIN = 4, RATE_MAX = 8, RATE_DEFAULT = 6;
+const RATE_MIN = 3, RATE_MAX = 15, RATE_DEFAULT = 6;
+const RATE_TICKS = [3, 6, 9, 12, 15];
 
 const TABS = [
   { id: 'gastos', label: '1. Gastos y Meta' },
@@ -123,10 +124,11 @@ const TAB_KEY = 'numero-libertad:tab';
 
 /* ---------- Cálculos (reglas del proyecto) ---------- */
 const toNumber = v => { const n = parseFloat(String(v).replace(',', '.')); return Number.isFinite(n) && n > 0 ? n : 0; };
-const categoryTotal = (cat, values, customs) =>
-  cat.items.reduce((s, [k]) => s + toNumber(values[k]), 0) +
+// Los gastos quitados con ✕ (hidden) no suman.
+const categoryTotal = (cat, values, customs, hidden = []) =>
+  cat.items.reduce((s, [k]) => s + (hidden.includes(k) ? 0 : toNumber(values[k])), 0) +
   customs.filter(c => c.cat === cat.id).reduce((s, c) => s + toNumber(c.value), 0);
-const monthlyTotal = (values, customs) => CATEGORIES.reduce((s, c) => s + categoryTotal(c, values, customs), 0); // Suma de las 4 categorías
+const monthlyTotal = (values, customs, hidden = []) => CATEGORIES.reduce((s, c) => s + categoryTotal(c, values, customs, hidden), 0); // Suma de las 4 categorías
 const annualTotal = monthly => monthly * 12;                            // Costo mensual × 12
 const goalConservative = annual => annual * 25;                         // Regla del 4%: anual × 25
 const goalDynamic = (annual, ratePct) => ratePct > 0 ? annual / (ratePct / 100) : 0; // anual ÷ tasa
@@ -197,7 +199,8 @@ function loadState() {
       : [];
     if (investments.length === 0) investments = [emptyInvestment()];
     const scenario = s.scenario === 'dinamico' ? 'dinamico' : 'conservador';
-    return { currency: s.currency, values: { ...emptyValues(), ...s.values }, customs, rate, origin: hasInv && !s.invExample ? origin : null,
+    const hidden = Array.isArray(s.hidden) ? s.hidden.filter(k => ALL_ITEMS.includes(k)) : [];
+    return { currency: s.currency, values: { ...emptyValues(), ...s.values }, customs, rate, hidden, origin: hasInv && !s.invExample ? origin : null,
       investments, scenario };
   } catch (e) { return null; }
 }
@@ -233,11 +236,15 @@ function AmountField({ id, value, onChange, cur, label }) {
   );
 }
 
-function MoneyInput({ id, label, value, onChange, cur }) {
+function MoneyInput({ id, label, value, onChange, cur, onRemove }) {
   return (
-    <div className="flex items-center justify-between gap-3 py-2.5">
-      <label htmlFor={id} className="min-w-0 text-[15px] leading-snug text-ink">{label}</label>
+    <div className="flex items-center justify-between gap-2 py-2.5">
+      <label htmlFor={id} className="min-w-0 flex-1 text-[15px] leading-snug text-ink">{label}</label>
       <AmountField id={id} value={value} onChange={onChange} cur={cur} />
+      <button id={`quitar-${id}`} onClick={onRemove} aria-label={`Quitar ${label}: no aplica para mí`} title="No aplica para mí"
+        className="-mr-1.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-soft hover:bg-surface2 hover:text-ink">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+      </button>
     </div>
   );
 }
@@ -259,8 +266,9 @@ function CustomRow({ item, cur, onChange, onRemove, autoFocus }) {
   );
 }
 
-function CategoryCard({ cat, index, values, setValue, customs, addCustom, updateCustom, removeCustom, lastAdded, cur, monthly }) {
-  const subtotal = categoryTotal(cat, values, customs);
+function CategoryCard({ cat, index, values, setValue, customs, addCustom, updateCustom, removeCustom, lastAdded, cur, monthly, hidden, hideItem, restoreItems }) {
+  const subtotal = categoryTotal(cat, values, customs, hidden);
+  const removed = cat.items.filter(([k]) => hidden.includes(k));
   const share = monthly > 0 ? Math.round((subtotal / monthly) * 100) : 0;
   const mine = customs.filter(c => c.cat === cat.id);
   return (
@@ -277,8 +285,8 @@ function CategoryCard({ cat, index, values, setValue, customs, addCustom, update
         </div>
       </header>
       <div className="divide-y divide-line">
-        {cat.items.map(([k, label]) => (
-          <MoneyInput key={k} id={`g-${k}`} label={label} value={values[k]} onChange={v => setValue(k, v)} cur={cur} />
+        {cat.items.filter(([k]) => !hidden.includes(k)).map(([k, label]) => (
+          <MoneyInput key={k} id={`g-${k}`} label={label} value={values[k]} onChange={v => setValue(k, v)} cur={cur} onRemove={() => hideItem(k)} />
         ))}
         {mine.map(item => (
           <CustomRow key={item.id} item={item} cur={cur} autoFocus={item.id === lastAdded}
@@ -292,6 +300,12 @@ function CategoryCard({ cat, index, values, setValue, customs, addCustom, update
         </span>
         Agregar gasto personal
       </button>
+      {removed.length > 0 && (
+        <p className="mt-2.5 text-center text-xs text-soft">
+          Quitaste: {removed.map(([, l]) => l).join(', ')}.{' '}
+          <button id={`restaurar-${cat.id}`} onClick={() => restoreItems(cat.id)} className="font-semibold text-goldink underline underline-offset-2 hover:text-ink">Volver a mostrar</button>
+        </p>
+      )}
     </section>
   );
 }
@@ -381,7 +395,7 @@ function Results({ cur, monthly, annual, rate, setRate, values, customs, scenari
               <input id="tasa" type="range" min={RATE_MIN} max={RATE_MAX} step="0.1" value={rate}
                 onChange={e => setRate(parseFloat(e.target.value))} style={{ '--p': `${pct}%` }} className="mt-3" />
               <div className="num mt-1.5 flex justify-between text-[11px] text-herosoft">
-                {[4, 5, 6, 7, 8].map(n => <span key={n}>{n}%</span>)}
+                {RATE_TICKS.map(n => <span key={n}>{n}%</span>)}
               </div>
             </div>
           </article>
@@ -510,7 +524,7 @@ function InvestmentList({ investments, cur, total, lastAdded, onAdd, onChange, o
       <header className="flex items-start justify-between gap-3 border-b border-line pb-3">
         <div className="min-w-0">
           <h3 id="inv-title" className="font-display text-xl font-medium text-ink">Mis inversiones</h3>
-          <p className="mt-0.5 text-sm text-soft">Elige la categoría, escribe un nombre corto, cuánto tienes invertido hoy y el retorno anual que esperas.</p>
+          <p className="mt-0.5 text-sm text-soft">Elige la categoría, escribe un nombre corto, el monto invertido o por invertir y el retorno anual que esperas.</p>
         </div>
         <div className="shrink-0 text-right">
           <p className="num text-lg font-bold text-ink">{fmt(total, cur)}</p>
@@ -688,10 +702,11 @@ function App() {
   const initial = useMemo(() => {
     const s = loadState();
     if (s) return s;
-    return { currency: 'PEN', values: emptyValues(), customs: [], rate: RATE_DEFAULT, origin: null, investments: [emptyInvestment()], scenario: 'conservador' };
+    return { currency: 'PEN', values: emptyValues(), customs: [], hidden: [], rate: RATE_DEFAULT, origin: null, investments: [emptyInvestment()], scenario: 'conservador' };
   }, []);
   const [currency, setCurrency] = useState(initial.currency);
   const [values, setValues] = useState(initial.values);
+  const [hidden, setHidden] = useState(initial.hidden || []);
   const [customs, setCustoms] = useState(initial.customs);
   const [investments, setInvestments] = useState(initial.investments);
   const [scenario, setScenario] = useState(initial.scenario);
@@ -729,12 +744,12 @@ function App() {
   const removeInvestment = id => { setInvestments(prev => { const next = prev.filter(i => i.id !== id); return next.length ? next : [emptyInvestment()]; }); setOrigin(null); };
 
   useEffect(() => {
-    setSaved(saveState({ currency, values, customs, rate, origin, investments, scenario }));
-  }, [currency, values, customs, rate, origin, investments, scenario]);
+    setSaved(saveState({ currency, values, customs, hidden, rate, origin, investments, scenario }));
+  }, [currency, values, customs, hidden, rate, origin, investments, scenario]);
 
 
   // Etapa 1
-  const monthly = monthlyTotal(values, customs);
+  const monthly = monthlyTotal(values, customs, hidden);
   const annual = annualTotal(monthly);
   const goal = scenario === 'dinamico' ? goalDynamic(annual, rate) : goalConservative(annual);
   // Etapa 2
@@ -760,7 +775,10 @@ function App() {
     setCurrency(to);
     setLastConversion({ from, to });
   };
-  const clearExpenses = () => { setValues(emptyValues()); setCustoms([]); setRate(RATE_DEFAULT); setOrigin(null); setLastConversion(null); };
+  // Quitar un gasto que no aplica: se oculta y su monto vuelve a cero.
+  const hideItem = k => { setValue(k, ''); setHidden(prev => prev.includes(k) ? prev : [...prev, k]); };
+  const restoreItems = catId => { const keys = CATEGORIES.find(c => c.id === catId).items.map(([k]) => k); setHidden(prev => prev.filter(k => !keys.includes(k))); };
+  const clearExpenses = () => { setValues(emptyValues()); setCustoms([]); setHidden([]); setRate(RATE_DEFAULT); setOrigin(null); setLastConversion(null); };
   const clearInvestments = () => { setInvestments([emptyInvestment()]); setOrigin(null); setLastConversion(null); };
 
   const goTo = id => {
@@ -821,6 +839,7 @@ function App() {
                 {CATEGORIES.map((c, i) => (
                   <CategoryCard key={c.id} cat={c} index={i} values={values} setValue={setValue} customs={customs}
                     addCustom={addCustom} updateCustom={updateCustom} removeCustom={removeCustom} lastAdded={lastAdded}
+                    hidden={hidden} hideItem={hideItem} restoreItems={restoreItems}
                     cur={currency} monthly={monthly} />
                 ))}
               </div>
@@ -836,7 +855,7 @@ function App() {
         {tab === 'portafolio' && (
           <section id="vista-portafolio" role="tabpanel" aria-labelledby="tab-portafolio">
             <div className="flex flex-wrap items-end justify-between gap-3">
-              <SectionHead title="Tu portafolio de inversiones" text="Anota lo que ya tienes invertido y el retorno anual que esperas de cada inversión." />
+              <SectionHead title="Tu portafolio de inversiones" text="Anota lo que ya tienes invertido o lo que esperas invertir para simular tu progreso." />
               <ClearButton id="borrar-inversiones" onConfirm={clearInvestments} />
             </div>
             <div className="mt-4 grid gap-5">
