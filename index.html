@@ -75,6 +75,7 @@ tailwind.config = {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.2/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo } = React;
@@ -88,14 +89,46 @@ const CURRENCIES = {
   CLP: { code: 'CLP', symbol: '$', label: 'Pesos chilenos', locale: 'es-CL', decimals: 0 },
 };
 
-// Tipo de cambio aplicado (unidades de cada moneda por 1 USD). Fijado al publicar esta versión.
-const FX = {
-  date: '25 de noviembre de 2026',
-  perUSD: { USD: 1, PEN: 3.47, CLP: 1025.06 },
-  sources: {
-    PEN: 'cotización de apertura USD/PEN (Dow Jones, vía Infobae)',
-    CLP: 'dólar observado del Banco Central de Chile',
-  },
+// Tipo de cambio (unidades de cada moneda por 1 USD).
+// Al abrir la página se consultan las tasas del día en la API abierta de Frankfurter.
+// Si la consulta falla, se usa la última consulta guardada en este navegador y, si no hay, estas tasas de respaldo.
+const FX_API = 'https://api.frankfurter.dev/v2/rates?base=USD&quotes=PEN,CLP';
+const FX_CACHE_KEY = 'numero-libertad:fx';
+const FX_FALLBACK = { date: '2026-11-26', perUSD: { USD: 1, PEN: 3.4786, CLP: 1034.75 }, status: 'fallback' };
+let FX = FX_FALLBACK; // tasas vigentes para convert(); App las actualiza al recibir la API
+
+// Respuesta esperada: [{"date":"2026-11-26","base":"USD","quote":"PEN","rate":3.4786}, ...]
+const parseFx = data => {
+  if (!Array.isArray(data)) return null;
+  const pick = q => data.find(r => r && r.base === 'USD' && r.quote === q && Number.isFinite(r.rate) && r.rate > 0);
+  const pen = pick('PEN'), clp = pick('CLP');
+  if (!pen || !clp) return null;
+  const date = [pen.date, clp.date].filter(d => /^\d{4}-\d{2}-\d{2}$/.test(String(d))).sort().pop() || '';
+  return { date, perUSD: { USD: 1, PEN: pen.rate, CLP: clp.rate } };
+};
+const readFxCache = () => {
+  try { const c = JSON.parse(localStorage.getItem(FX_CACHE_KEY)); return c && c.perUSD && c.perUSD.PEN > 0 && c.perUSD.CLP > 0 ? { ...c, perUSD: { USD: 1, PEN: c.perUSD.PEN, CLP: c.perUSD.CLP } } : null; } catch (e) { return null; }
+};
+async function loadFx() {
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = setTimeout(() => ctrl && ctrl.abort(), 8000);
+  try {
+    const res = await fetch(FX_API, { signal: ctrl ? ctrl.signal : undefined, cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const fx = parseFx(await res.json());
+    if (!fx) throw new Error('formato inesperado');
+    const live = { ...fx, status: 'live' };
+    try { localStorage.setItem(FX_CACHE_KEY, JSON.stringify({ date: live.date, perUSD: live.perUSD })); } catch (e) {}
+    return live;
+  } catch (e) {
+    const cached = readFxCache();
+    return cached ? { ...cached, status: 'cached' } : FX_FALLBACK;
+  } finally { clearTimeout(timer); }
+}
+const fmtFxDate = iso => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+  if (!m) return 'fecha no disponible';
+  return new Intl.DateTimeFormat('es-PE', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])));
 };
 const convert = (amount, from, to) => (amount / FX.perUSD[from]) * FX.perUSD[to];
 
@@ -415,17 +448,23 @@ function Results({ cur, monthly, annual, rate, setRate, values, customs, scenari
   );
 }
 
-function FxNote({ cur, lastConversion }) {
-  const pen = FX.perUSD.PEN, clp = FX.perUSD.CLP;
+function FxNote({ fx, lastConversion }) {
+  const pen = fx.perUSD.PEN, clp = fx.perUSD.CLP;
+  const cl = d => new Intl.NumberFormat('es-CL', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const status = {
+    loading: 'Consultando las tasas del día…',
+    live: `Tasas del ${fmtFxDate(fx.date)}, cargadas al abrir la página desde la API abierta de Frankfurter (api.frankfurter.dev).`,
+    cached: `No se pudo consultar la API en este momento. Se usan las últimas tasas guardadas en este navegador, del ${fmtFxDate(fx.date)} (Frankfurter).`,
+    fallback: `No se pudieron cargar las tasas del día. Se usan tasas de respaldo del ${fmtFxDate(fx.date)} (Frankfurter).`,
+  }[fx.status] || '';
   return (
     <footer className="mt-8 border-t border-line pt-4 text-xs leading-relaxed text-soft">
       <p className="eyebrow text-goldink">Tipo de cambio aplicado</p>
       <p className="num mt-2 text-sm text-ink">
-        1 USD = S/ {fmtRate(pen)} · 1 USD = $ {new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2 }).format(clp)} CLP · 1 PEN = $ {new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(clp / pen)} CLP
+        1 USD = S/ {fmtRate(pen, 4)} · 1 USD = $ {cl(2).format(clp)} CLP · 1 PEN = $ {cl(2).format(clp / pen)} CLP
       </p>
-      <p className="mt-1.5 max-w-[80ch]">
-        Tasas del {FX.date}. USD/PEN: {FX.sources.PEN}. USD/CLP: {FX.sources.CLP}. La conversión entre soles y pesos se calcula a través del dólar.
-        Al cambiar de moneda, todos tus montos se convierten con estas tasas, que se actualizan con cada nueva versión de la calculadora.
+      <p className="mt-1.5 max-w-[80ch]" aria-live="polite">
+        {status} La conversión entre soles y pesos se calcula a través del dólar. Al cambiar de moneda, todos tus montos se convierten con estas tasas.
       </p>
       {lastConversion && (
         <p className="mt-1.5 font-semibold text-goldink" aria-live="polite">Montos convertidos de {lastConversion.from} a {lastConversion.to}.</p>
@@ -689,6 +728,321 @@ function Progress({ cur, scenario, setScenario, rate, goal, total, monthly, pass
   );
 }
 
+/* ---------- Etapa 3: correo y resumen en PDF ---------- */
+const LEADS_URL = 'https://script.google.com/macros/s/AKfycbw_1yNNELC9y0zNU06LJGx0Ujw-zLLuHvQBr7awqZ-GFWJE_L14xi_I24-KxDrZSNVS/exec';
+const EMAIL_KEY = 'numero-libertad:email';
+const PDF_NAME = 'Simulacion_libertad_financiera.pdf';
+const CONSENT_TEXT = 'Acepto el tratamiento de mi correo electrónico para recibir la encuesta de satisfacción';
+const isValidEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v).trim());
+
+// Envío silencioso: no se espera la respuesta (no-cors no permite leerla) y nunca bloquea la descarga.
+// Con no-cors solo se permite un Content-Type simple, por eso el JSON viaja como text/plain;
+// en Apps Script se lee con JSON.parse(e.postData.contents).
+function sendLead(payload) {
+  try {
+    fetch(LEADS_URL, {
+      method: 'POST', mode: 'no-cors', keepalive: true,
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  } catch (e) { /* sin conexión: el PDF se descarga igual */ }
+}
+
+function buildPdf(r) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const W = 210, M = 18, CW = W - M * 2;
+  const GREEN = [27, 59, 43], GOLD = [197, 160, 89], SOFT = [90, 110, 98], LINE = [226, 219, 206], CREAM = [250, 248, 245];
+  let y = 0;
+  const BOTTOM = 273; // por debajo va el descargo de responsabilidad en cada página
+  const ensure = h => { if (y + h > BOTTOM) { doc.addPage(); y = 20; } };
+  const text = (t, x, yy, o = {}) => {
+    doc.setFont('helvetica', o.bold ? 'bold' : 'normal'); doc.setFontSize(o.size || 10);
+    doc.setTextColor(...(o.color || GREEN)); doc.text(String(t), x, yy, o.align ? { align: o.align } : undefined);
+  };
+  const section = title => {
+    ensure(16); y += 2;
+    text(title.toUpperCase(), M, y, { size: 9, bold: true, color: GOLD });
+    doc.setDrawColor(...LINE); doc.setLineWidth(0.3); doc.line(M, y + 2, W - M, y + 2); y += 9;
+  };
+  const row = (label, value, o = {}) => {
+    ensure(8);
+    text(label, M, y, { size: 10.5, color: o.labelColor || SOFT });
+    text(value, W - M, y, { size: o.size || 10.5, bold: o.bold !== false, align: 'right' });
+    y += o.gap || 6.5;
+  };
+  const f = n => fmt(n, r.currency);
+
+  // Encabezado
+  doc.setFillColor(...GREEN); doc.rect(0, 0, W, 38, 'F');
+  text('SIMULACIÓN DE LIBERTAD FINANCIERA', M, 14, { size: 9, bold: true, color: GOLD });
+  text('Tu Número de la Libertad', M, 25, { size: 20, bold: true, color: CREAM });
+  text(`Fecha del diagnóstico: ${r.dateLabel}  ·  Moneda: ${r.currency}`, M, 32, { size: 9.5, color: [201, 214, 205] });
+  y = 47;
+
+  section('1. Costo de vida');
+  row('Costo de vida mensual', f(r.monthly), { size: 12 });
+  row('Costo de vida anual (mensual × 12)', f(r.annual), { size: 12 });
+  r.categories.forEach(c => row(`   ${c.name}`, `${f(c.total)}  (${c.pct}%)`, { bold: false, gap: 5.5 }));
+  y += 2;
+
+  section('2. Tu Número de la Libertad (meta de capital)');
+  row(`Escenario conservador (regla del 4%: anual × 25)${r.scenario === 'conservador' ? '  - usado para tu avance' : ''}`, f(r.goalConservative), { size: 12 });
+  row(`Escenario dinámico (anual ÷ ${pctLabel(r.rate)}%)${r.scenario === 'dinamico' ? '  - usado para tu avance' : ''}`, f(r.goalDynamic), { size: 12 });
+
+  section('3. Tu portafolio actual');
+  row('Capital total invertido', f(r.invested), { size: 12 });
+  row('Ingreso pasivo mensual estimado', f(r.passiveMonthly));
+  row('Ingreso pasivo anual estimado', f(r.passiveAnnual));
+  row('Rentabilidad promedio ponderada', `${pctLabel(r.weighted)}%`);
+  y += 2;
+  const cols = [
+    { h: 'Categoría', x: M }, { h: 'Inversión', x: M + 30 }, { h: 'País', x: M + 66 },
+    { h: 'Monto', x: M + 110, align: 'right' }, { h: 'Retorno', x: M + 130, align: 'right' },
+    { h: 'Al mes', x: M + 155, align: 'right' }, { h: 'Peso', x: W - M - 1.5, align: 'right' },
+  ];
+  const head = () => {
+    ensure(10);
+    doc.setFillColor(243, 239, 232); doc.rect(M, y - 4.5, CW, 7, 'F');
+    cols.forEach(c => text(c.h, c.x + (c.align ? 0 : 1.5), y, { size: 8.5, bold: true, color: SOFT, align: c.align }));
+    y += 7;
+  };
+  if (r.investments.length === 0) {
+    text('Aún no registraste inversiones.', M, y, { size: 10, color: SOFT }); y += 7;
+  } else {
+    head();
+    r.investments.forEach(i => {
+      if (y + 7 > 280) { doc.addPage(); y = 20; head(); }
+      const cells = [i.cat || '-', i.name || '-', i.country || '-', f(i.amount), `${pctLabel(i.rate)}%`, f(i.monthly), `${pctLabel(i.weight)}%`];
+      cells.forEach((v, k) => text(v, cols[k].x + (cols[k].align ? 0 : 1.5), y, { size: 9, align: cols[k].align, bold: k === 3 }));
+      doc.setDrawColor(...LINE); doc.line(M, y + 2.5, W - M, y + 2.5);
+      y += 7;
+    });
+  }
+
+  section('4. Tu avance hacia la meta');
+  const bar = (label, pct, detail) => {
+    ensure(22);
+    text(label, M, y, { size: 10.5, color: SOFT });
+    text(`${pctLabel(pct)}%`, W - M, y, { size: 16, bold: true, align: 'right' });
+    y += 4;
+    doc.setFillColor(243, 239, 232); doc.roundedRect(M, y, CW, 3.5, 1.7, 1.7, 'F');
+    const w = Math.max(0, Math.min(100, pct)) / 100 * CW;
+    if (w > 0) { doc.setFillColor(...GOLD); doc.roundedRect(M, y, Math.max(w, 3.5), 3.5, 1.7, 1.7, 'F'); }
+    y += 9;
+    text(detail, M, y, { size: 9.5, color: SOFT }); y += 7.5;
+  };
+  bar(`Avance de capital (escenario ${r.scenario === 'dinamico' ? `dinámico ${pctLabel(r.rate)}%` : 'conservador 4%'})`, r.capitalPct,
+    r.goal > 0 ? (r.capitalGap > 0 ? `Tienes ${f(r.invested)} de ${f(r.goal)}. Te faltan ${f(r.capitalGap)}.` : 'Ya alcanzaste tu meta de capital.') : 'Completa tus gastos para calcular tu meta.');
+  bar('Cobertura de gastos mensuales', r.coveragePct,
+    r.monthly > 0 ? (r.coverageGap > 0 ? `Tus inversiones generan ${f(r.passiveMonthly)} al mes. Faltan ${f(r.coverageGap)} al mes.` : 'Tu ingreso pasivo ya cubre tu costo de vida.') : 'Completa tus gastos para ver la cobertura.');
+
+  section('5. Solo lo esencial (escenario de emergencia)');
+  doc.splitTextToSize('Tu progreso si tus gastos fueran solo los de la categoría Gastos esenciales.', CW).forEach(l => { ensure(6); text(l, M, y, { size: 9.5, color: SOFT }); y += 5; });
+  y += 1;
+  if (r.ess.monthly > 0) {
+    row(`Gasto esencial ${f(r.ess.monthly)}/mes  ·  Meta esencial (dinámico ${pctLabel(r.rate)}%)`, f(r.ess.goal));
+    row(`Avance hacia la meta esencial${r.ess.capitalGap > 0 ? ` (faltan ${f(r.ess.capitalGap)})` : ''}  ·  Cobertura de gastos esenciales ${pctLabel(r.ess.coveragePct)}%`, `${pctLabel(r.ess.capitalPct)}%`);
+  } else {
+    text('No ingresaste gastos esenciales.', M, y, { size: 10, color: SOFT }); y += 7;
+  }
+
+  // Nota de tipo de cambio (al final del contenido)
+  ensure(8); y += 1;
+  doc.splitTextToSize(`Tipo de cambio: 1 USD = S/ ${fmtRate(r.fx.perUSD.PEN, 4)} · 1 USD = $ ${fmtRate(r.fx.perUSD.CLP, 2)} CLP (${fmtFxDate(r.fx.date)}, Frankfurter). Simulación generada en tu dispositivo con los datos que ingresaste.`, CW)
+    .forEach(l => { ensure(5); text(l, M, y, { size: 8.5, color: SOFT }); y += 4.5; });
+
+  // Pie de página en todas las páginas: descargo de responsabilidad
+  const disclaimer = 'Los resultados y diagnósticos generados en este documento tienen un propósito estrictamente educativo y de planificación matemática personal. Esta plataforma no brinda asesoría financiera ni recomendaciones de compra o venta de instrumentos de inversión. Los cálculos utilizan supuestos teóricos ingresados por el usuario (como tasas de retorno esperadas) y no contemplan automáticamente variables como inflación, impuestos o comisiones. Toda decisión financiera es responsabilidad exclusiva de quien utiliza la herramienta.';
+  const pages = doc.getNumberOfPages();
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p);
+    const fy = 275;
+    doc.setDrawColor(...LINE); doc.setLineWidth(0.3); doc.line(M, fy, W - M, fy);
+    const label = 'Descargo de Responsabilidad:';
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
+    const lw = doc.getTextWidth(label + ' ');
+    doc.setFont('helvetica', 'normal');
+    const first = doc.splitTextToSize(disclaimer, CW - lw)[0];
+    const rest = doc.splitTextToSize(disclaimer.slice(first.length).trim(), CW);
+    let ly = fy + 4.5;
+    text(label, M, ly, { size: 7.5, bold: true, color: GREEN });
+    text(first, M + lw, ly, { size: 7.5, color: SOFT });
+    rest.forEach(l => { ly += 3.4; text(l, M, ly, { size: 7.5, color: SOFT }); });
+    if (pages > 1) text(`Página ${p} de ${pages}`, W - M, 293.5, { size: 7.5, color: SOFT, align: 'right' });
+  }
+
+  return doc;
+}
+
+function DownloadCard({ report }) {
+  const [email, setEmail] = useState(() => { try { return localStorage.getItem(EMAIL_KEY) || ''; } catch (e) { return ''; } });
+  const [consent, setConsent] = useState(false);
+  const [touched, setTouched] = useState(false);
+  const [status, setStatus] = useState(null); // null | 'ok' | 'error' | 'declined'
+  // Dentro de claude.ai la descarga pasa por la capacidad "downloads"; en GitHub Pages se usa la descarga normal de jsPDF.
+  const dlRef = React.useRef(null);
+  useEffect(() => {
+    let alive = true;
+    if (window.claude && typeof window.claude.use === 'function') {
+      window.claude.use('downloads').then(d => { if (alive) dlRef.current = d; }).catch(() => {});
+    }
+    return () => { alive = false; };
+  }, []);
+  const emailOk = isValidEmail(email);
+  const showEmailError = touched && !emailOk;
+  const showConsentError = touched && !consent;
+
+  const submit = e => {
+    e.preventDefault();
+    setTouched(true); setStatus(null);
+    if (!emailOk || !consent) return;
+    const clean = email.trim();
+    try { localStorage.setItem(EMAIL_KEY, clean); } catch (err) {}
+    sendLead({
+      email: clean,
+      currency: report.currency,
+      monthlyExpense: Math.round(report.monthly),
+      freedomNumber: Math.round(report.goal),
+    });
+    let doc;
+    try { doc = buildPdf(report); } catch (err) { setStatus('error'); return; }
+    const dl = dlRef.current;
+    if (dl) {
+      dl.save({ filename: PDF_NAME, data: doc.output('blob') })
+        .then(() => setStatus('ok'))
+        .catch(err => setStatus(err && err.code === 'declined' ? 'declined' : 'error'));
+    } else {
+      try { doc.save(PDF_NAME); setStatus('ok'); } catch (err) { setStatus('error'); }
+    }
+  };
+
+  return (
+    <section id="descarga-pdf" className="mt-6 rounded-2xl bg-hero p-5 text-heroink sm:p-6" aria-labelledby="pdf-title">
+      <h2 id="pdf-title" className="font-display text-2xl font-medium leading-tight sm:text-3xl">Descarga la simulación de tu Progreso (PDF)</h2>
+      <p className="mt-1.5 max-w-[60ch] text-sm text-herosoft">Recibe en un PDF tu costo de vida, tu Número de la Libertad, tu portafolio y tu avance hacia la meta.</p>
+      <form onSubmit={submit} noValidate className="mt-5 flex flex-col gap-4">
+        <div>
+          <label htmlFor="pdf-email" className="text-sm font-semibold">Correo electrónico <span className="text-gold">*</span></label>
+          <input id="pdf-email" type="email" inputMode="email" autoComplete="email" required placeholder="tu@correo.com" value={email}
+            onChange={e => setEmail(e.target.value)} onBlur={() => email && setTouched(true)}
+            aria-invalid={showEmailError} aria-describedby={showEmailError ? 'pdf-email-error' : undefined}
+            className={`mt-1.5 w-full rounded-xl border bg-white/10 px-3.5 py-3 text-[16px] text-heroink placeholder:text-herosoft focus:outline-none focus:ring-2 focus:ring-gold ${showEmailError ? 'border-[#E8A08C]' : 'border-white/25'}`} />
+          {showEmailError && <p id="pdf-email-error" className="mt-1.5 text-sm text-[#F2B8A8]">{email.trim() ? 'Revisa el correo: debe tener el formato nombre@dominio.com.' : 'Escribe tu correo electrónico para continuar.'}</p>}
+        </div>
+        <div>
+          <label htmlFor="pdf-consent" className="flex cursor-pointer items-start gap-3 text-sm leading-relaxed">
+            <input id="pdf-consent" type="checkbox" required checked={consent} onChange={e => setConsent(e.target.checked)}
+              aria-invalid={showConsentError}
+              className="mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-white/40 accent-[#C5A059]" />
+            <span>{CONSENT_TEXT} <span className="text-gold">*</span></span>
+          </label>
+          {showConsentError && <p className="mt-1.5 pl-8 text-sm text-[#F2B8A8]">Marca la casilla para poder descargar tu resumen.</p>}
+        </div>
+        <button id="btn-pdf" type="submit"
+          className="w-full rounded-2xl bg-gold px-5 py-4 text-base font-bold text-[#1B3B2B] hover:opacity-90 sm:w-auto sm:self-start">
+          Enviar y Descargar mi Resumen PDF
+        </button>
+        <p aria-live="polite" className="text-sm">
+          {status === 'ok' && <span className="text-heroink">Listo. Tu archivo {PDF_NAME} se está descargando.</span>}
+          {status === 'declined' && <span className="text-herosoft">La descarga se canceló. Puedes volver a intentarlo.</span>}
+          {status === 'error' && <span className="text-[#F2B8A8]">No se pudo generar el PDF en este navegador. Vuelve a intentarlo o prueba con otro navegador.</span>}
+        </p>
+      </form>
+    </section>
+  );
+}
+
+function PrivacyNote() {
+  return (
+    <p id="privacidad" className="mt-5 flex gap-2.5 rounded-xl border border-line bg-surface px-4 py-3 text-sm leading-relaxed text-soft">
+      <span aria-hidden="true">🔒</span>
+      <span><strong className="text-ink">Tu privacidad es prioridad:</strong> Las inversiones que anotes en Mi Portafolio, reales o simuladas, nunca se envían ni se guardan en nuestros servidores; se procesan únicamente en tu dispositivo para generar tu PDF. Usamos datos generales y anónimos para estadísticas.</span>
+    </p>
+  );
+}
+
+function Disclaimer() {
+  return (
+    <p id="aviso-legal" className="mt-3 flex gap-2.5 rounded-xl border border-line bg-surface px-4 py-3 text-sm leading-relaxed text-soft">
+      <span aria-hidden="true">ℹ️</span>
+      <span><strong className="text-ink">Importante:</strong> Esta aplicación es exclusivamente una herramienta de cálculo matemático y simulación con fines educativos e informativos. No constituye asesoría financiera, tributaria, legal ni recomendación de inversión. Las proyecciones mostradas dependen únicamente de los datos ingresados por cada usuario y no garantizan rendimientos futuros.</span>
+    </p>
+  );
+}
+
+function EssentialProgress({ cur, rate, ess, total, passiveMonthly }) {
+  return (
+    <section id="solo-esencial" className="mt-6 rounded-2xl border border-line bg-surface p-5 sm:p-6" aria-labelledby="ess-title">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <p className="eyebrow text-goldink">Escenario de emergencia</p>
+          <h2 id="ess-title" className="font-display mt-1 text-2xl font-medium text-ink sm:text-3xl">Solo lo esencial</h2>
+        </div>
+        <div className="min-w-0">
+          <p className="mb-1.5 text-xs text-soft">Medir contra el escenario</p>
+          <div role="radiogroup" aria-label="Escenario para medir lo esencial" className="inline-flex rounded-full border border-line bg-bg p-1">
+            <span id="ess-esc-dinamico" role="radio" aria-checked="true" aria-disabled="true"
+              className="num rounded-full bg-ink px-3.5 py-2 text-sm font-semibold text-bg">
+              Dinámico {pctLabel(rate)}%
+            </span>
+          </div>
+        </div>
+      </div>
+      <p className="mt-3 max-w-[65ch] text-sm leading-relaxed text-soft">
+        Esta sección calcula tu progreso como si tus gastos fueran solo los de la categoría <strong className="text-ink">Gastos esenciales</strong>. Te muestra qué tan cerca estás de cubrir lo básico para vivir ante una emergencia.
+      </p>
+
+      {ess.monthly > 0 ? (
+        <>
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div className="min-w-0 rounded-xl bg-surface2 px-3.5 py-3">
+              <p className="text-xs text-soft">Gasto esencial mensual</p>
+              <p className="num mt-0.5 break-words text-lg font-bold text-ink">{fmt(ess.monthly, cur)}</p>
+            </div>
+            <div className="min-w-0 rounded-xl bg-surface2 px-3.5 py-3">
+              <p className="text-xs text-soft">Meta esencial</p>
+              <p className="num mt-0.5 break-words text-lg font-bold text-ink">{fmt(ess.goal, cur)}</p>
+            </div>
+            <div className="col-span-2 min-w-0 rounded-xl bg-surface2 px-3.5 py-3 sm:col-span-1">
+              <p className="text-xs text-soft">Capital actual</p>
+              <p className="num mt-0.5 break-words text-lg font-bold text-ink">{fmt(total, cur)}</p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <article className="rounded-xl border border-line bg-bg p-4">
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className="text-[15px] font-semibold text-ink">Avance hacia la meta esencial</h3>
+                <p className="num font-display text-3xl font-semibold text-ink">{pctLabel(ess.capitalPct)}%</p>
+              </div>
+              <div className="mt-3"><Meter value={ess.capitalPct} label="Avance hacia la meta esencial" /></div>
+              <p className="num mt-3 text-sm leading-relaxed text-soft">
+                {ess.capitalGap > 0
+                  ? <>Te faltan <strong className="text-goldink">{fmt(ess.capitalGap, cur)}</strong> para cubrir solo lo esencial.</>
+                  : <>Tu capital ya alcanza para cubrir solo lo esencial.</>}
+              </p>
+            </article>
+            <article className="rounded-xl border border-line bg-bg p-4">
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className="text-[15px] font-semibold text-ink">Cobertura de gastos esenciales</h3>
+                <p className="num font-display text-3xl font-semibold text-ink">{pctLabel(ess.coveragePct)}%</p>
+              </div>
+              <div className="mt-3"><Meter value={ess.coveragePct} label="Cobertura de gastos esenciales" /></div>
+              <p className="num mt-3 text-sm leading-relaxed text-soft">
+                Tus inversiones generan <strong className="text-ink">{fmt(passiveMonthly, cur)}</strong> al mes frente a <strong className="text-ink">{fmt(ess.monthly, cur)}</strong> de gastos esenciales.{' '}
+                {ess.coverageGap > 0 ? <>Faltan <strong className="text-goldink">{fmt(ess.coverageGap, cur)}</strong> al mes.</> : <>Ya cubren lo esencial.</>}
+              </p>
+            </article>
+          </div>
+        </>
+      ) : (
+        <p className="mt-4 rounded-xl bg-surface2 px-3.5 py-3 text-sm text-soft">Completa la categoría Gastos esenciales en la pestaña Gastos y Meta para ver este cálculo.</p>
+      )}
+    </section>
+  );
+}
+
 function SectionHead({ title, text }) {
   return (
     <div className="min-w-0">
@@ -714,6 +1068,14 @@ function App() {
   const [saved, setSaved] = useState(null);
   const [lastAdded, setLastAdded] = useState(null);
   const [lastConversion, setLastConversion] = useState(null);
+  // Tipo de cambio: primero el guardado o el de respaldo, luego el del día si la API responde.
+  const [fx, setFx] = useState(() => { const c = readFxCache(); return c ? { ...c, status: 'loading' } : { ...FX_FALLBACK, status: 'loading' }; });
+  useEffect(() => {
+    let alive = true;
+    FX = fx;
+    loadFx().then(r => { if (alive) { FX = r; setFx(r); } });
+    return () => { alive = false; };
+  }, []);
   // Montos tal como la usuaria los escribió, para convertir siempre desde el original y no acumular redondeos.
   const [origin, setOrigin] = useState(initial.origin || null);
   const [tab, setTab] = useState(() => {
@@ -757,6 +1119,30 @@ function App() {
   const passiveAnnual = portfolioAnnualReturn(investments);
   const passiveMonthly = passiveAnnual / 12;
   const capitalPct = goal > 0 ? (invested / goal) * 100 : 0;
+
+  // Solo lo esencial: el mismo cálculo usando únicamente la categoría Gastos esenciales
+  const essMonthly = categoryTotal(CATEGORIES[0], values, customs, hidden);
+  const essGoal = goalDynamic(essMonthly * 12, rate); // siempre escenario dinámico
+  const ess = {
+    monthly: essMonthly, annual: essMonthly * 12, goal: essGoal,
+    capitalPct: essGoal > 0 ? (invested / essGoal) * 100 : 0, capitalGap: Math.max(0, essGoal - invested),
+    coveragePct: essMonthly > 0 ? (passiveMonthly / essMonthly) * 100 : 0, coverageGap: Math.max(0, essMonthly - passiveMonthly),
+  };
+
+  // Etapa 3: datos para el PDF (se calculan y quedan solo en este dispositivo)
+  const report = {
+    currency, rate, scenario, fx, monthly, annual, goal, ess,
+    dateLabel: new Intl.DateTimeFormat('es-PE', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date()),
+    goalConservative: goalConservative(annual), goalDynamic: goalDynamic(annual, rate),
+    categories: CATEGORIES.map(c => { const t = categoryTotal(c, values, customs, hidden); return { name: c.name, total: t, pct: monthly > 0 ? Math.round(t / monthly * 100) : 0 }; }),
+    invested, passiveAnnual, passiveMonthly, weighted: invested > 0 ? passiveAnnual / invested * 100 : 0,
+    investments: investments.filter(i => toNumber(i.amount) > 0 || i.name.trim()).map(i => {
+      const a = toNumber(i.amount), yr = invAnnualReturn(i);
+      return { cat: i.cat, name: i.name.trim(), country: i.country, amount: a, rate: toNumber(i.rate), monthly: yr / 12, weight: invested > 0 ? a / invested * 100 : 0 };
+    }),
+    capitalPct, capitalGap: Math.max(0, goal - invested),
+    coveragePct: monthly > 0 ? passiveMonthly / monthly * 100 : 0, coverageGap: Math.max(0, monthly - passiveMonthly),
+  };
 
   const changeCurrency = to => {
     const from = currency;
@@ -876,13 +1262,17 @@ function App() {
           <section id="vista-progreso" role="tabpanel" aria-labelledby="tab-progreso">
             <Progress cur={currency} scenario={scenario} setScenario={setScenario} rate={rate} goal={goal}
               total={invested} monthly={monthly} passiveMonthly={passiveMonthly} investments={investments} />
+            <EssentialProgress cur={currency} rate={rate} ess={ess} total={invested} passiveMonthly={passiveMonthly} />
             <p className="mt-4 px-1 text-xs leading-relaxed text-soft">
               Retorno anual = monto × tasa ÷ 100 · retorno mensual = retorno anual ÷ 12 · rentabilidad ponderada = ingreso pasivo anual ÷ capital total · avance de capital = capital invertido ÷ Número de la Libertad · cobertura = ingreso pasivo mensual ÷ costo de vida mensual.
             </p>
+            <DownloadCard report={report} />
           </section>
         )}
 
-        <FxNote cur={currency} lastConversion={lastConversion} />
+        <FxNote fx={fx} lastConversion={lastConversion} />
+        <PrivacyNote />
+        <Disclaimer />
 
         <div className="mt-5">
           <span className="text-xs text-soft" aria-live="polite">
